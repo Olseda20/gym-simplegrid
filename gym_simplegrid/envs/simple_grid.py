@@ -55,6 +55,7 @@ class SimpleGridEnv(Env):
         retrospective_feedback=True,
         reward_type="",
         decision_map=[],
+        episode=1,
     ):
         """
         Initialise the environment.
@@ -90,9 +91,12 @@ class SimpleGridEnv(Env):
         self.reward_type = reward_type
         self.retrospective_feedback = retrospective_feedback
         self.lr = 0.2
+        self.decay_gamma = 0.9
         self.exp_rate = EXPLORE
         self.step_count = 0
         self.max_steps = 100
+        self.episode = episode
+
         # self.q_table = {}
         # self.initialise_q_table()
 
@@ -102,7 +106,7 @@ class SimpleGridEnv(Env):
             for j in range(self.ncol):
                 self.Q_values[(i, j)] = {}
                 for a in self.MOVES:
-                    self.Q_values[(i, j)][a] = 0  # Q value is a dict of dict
+                    self.Q_values[(i, j)][a] = 0.0  # Q value is a dict of dict
 
     def choose_action(self):
         # choose action with most expected value
@@ -204,19 +208,16 @@ class SimpleGridEnv(Env):
         # Get the current position of the agent
         row, col = self.agent_xy
         dx, dy = self.MOVES[action]
-        target_row = row + dx
-        target_col = col + dy
+        # if not retry:
+        if self.is_in_bounds(row + dx, col + dy) and self.is_free(row + dx, col + dy):
+            target_row = row + dx
+            target_col = col + dy
+        else:
+            target_row = row
+            target_col = col
 
         return target_row, target_col, action
 
-    def automated_future_response(self, move):
-        pos_x = self.agent_xy[0]
-        pos_y = self.agent_xy[1]
-
-        if move in self.decision_map[pos_x][pos_y]:
-            return True
-        else:
-            return False
 
     def automated_response(self, action, position):
         if self.MOVES_TEXT[action] in self.decision_map[position[0]][position[1]]:
@@ -238,9 +239,9 @@ class SimpleGridEnv(Env):
 
         self.step_count += 1
         if self.human_feedback == 1:
-            print("Next action chosen: ", self.MOVES_TEXT[action])
-            print("action", action)
-            print("agent_xy", self.agent_xy)
+            # print("Next action chosen: ", self.MOVES_TEXT[action])
+            # print("action", action)
+            # print("agent_xy", self.agent_xy)
             good_feedback = self.automated_response(action, self.agent_xy)
             if good_feedback == 1:
                 action = action
@@ -277,30 +278,14 @@ class SimpleGridEnv(Env):
         # Compute the reward
         block_reward = self.get_reward(*self.agent_xy)
         reward_value = self.state_values[target_row][target_col] + block_reward + u_reward
-        # self.decay_gamma = 0.9
-        # max_reward
-
-        # if self.done or self.step_count > self.max_steps:
-        #     reward = self.get_reward(*self.agent_xy)
-        #     for a in self.actions:
-        #         self.Q_values[self.State.state][a] = reward
-        #     print("Game End Reward", reward)
-        #     for s in reversed(self.states):
-        #         current_q_value = self.Q_values[s[0]][s[1]]
-        #         reward = current_q_value + self.lr * (
-        #             self.decay_gamma * reward - current_q_value
-        #         )
-        #         self.Q_values[s[0]][s[1]] = round(reward, 3)
-        #     self.reset()
-        #     i += 1
 
         if self.reward_type == "q_learning":
             self.reward += self.lr * (
                 (u_reward + block_reward)
-                # + discount*()
+                + self.decay_gamma * max(list(self.Q_values[self.agent_xy].values()))
                 - self.state_values[target_row][target_col]
             )
-            self.state_values[target_row][target_col] = round(reward_value, 3)
+            self.Q_values[self.agent_xy][action] = reward_value
         else:
             self.reward = reward_value
 
@@ -444,7 +429,7 @@ class SimpleGridEnv(Env):
             else:
                 self.update_agent_patch()
 
-            self.ax.set_title(f"Step: {self.n_iter}, Reward: {self.reward}")
+            self.ax.set_title(f"Step: {self.n_iter}, Reward: {self.reward}, Episode: {self.episode}")
             # self.fig.canvas.draw()
             # self.fig.canvas.flush_events()
             plt.pause(1 / self.fps)
