@@ -45,6 +45,9 @@ if __name__ == "__main__":
         obstacle_map=obstacle_map,
         render_mode="human",
         decision_map=decision_map,
+        human_feedback=0,
+        retrospective_feedback=True,
+        reward_type="",
     )
     env.human_feedback = 1
     obs, info = env.reset(seed=1, options=options)
@@ -55,25 +58,17 @@ if __name__ == "__main__":
 
     with open(f"log/{FOLDER_NAME}/history.csv", "w") as f:
         f.write(f"step,x,y,reward,done,action\n")
-        #
-        # for t in range(50):
-        #     # img = env.render(caption=f"t:{t}, rew:{rew}, pos:{obs}")
-        #
-        #     action = env.action_space.sample()
-        #     f.write(
-        #         f"{t},{info['agent_xy'][0]},{info['agent_xy'][1]},{rew},{done},{action}\n"
-        #     )
-        #
-        #     if done:
-        #         logger.info(f"...agent is done at time step {t}")
-        #         break
-        #
-        #     obs, rew, done, _, info = env.step(action)
-        #
-
-        while i < round:
+        for t in range(50):        
+            action = env.action_space.sample()
+            f.write(
+                f"{t},{info['agent_xy'][0]},{info['agent_xy'][1]},{rew},{done},{action}\n"
+            )
+        
             if done:
-                reward = red
+                logger.info(f"...agent is done at time step {t}")
+                break
+        
+            obs, rew, done, _, info = env.step(action)
 
     if env.render_mode == "rgb_array_list":
         frames = env.render()
