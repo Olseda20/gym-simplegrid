@@ -23,7 +23,7 @@ MAPS = {
 
 
 class SimpleGridEnv(Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 100}
     FREE: int = 0
     OBSTACLE: int = 1
     MOVES: dict[int, tuple] = {
@@ -38,9 +38,6 @@ class SimpleGridEnv(Env):
         self,
         obstacle_map: str | list[str],
         render_mode: str | None = None,
-        human_feedback=1,
-        retrospective_feedback=True,
-        reward_type="",
         decision_map=[],
         episode=1,
     ):
@@ -75,22 +72,24 @@ class SimpleGridEnv(Env):
 
         self.render_mode = render_mode
         self.fps = self.metadata["render_fps"]
-        self.human_feedback = human_feedback
-        self.reward_type = reward_type
-        self.retrospective_feedback = retrospective_feedback
+        self.human_feedback = 0
+        self.reward_type = "q_learning"
+        self.retrospective_feedback = False
         self.steps_per_feeback = 10
         self.steps_per_ret_feeback = 10
-        self.lr = 0.3
-        self.decay_gamma = 0.95
-        self.exp_rate = 0.7 
-        self.step_count = 0
+        self.lr = 0.5
+        self.decay_gamma = 0.9
+        self.exp_rate = 0.7
         self.max_steps = 100
         self.episode = episode
         self.next_action = None
         self.prev_agent_xy = None
-        self.MANUAL_FEEDBACK = 0.1  # reward feedback from human: + and -
+        self.MANUAL_FEEDBACK = 5.0  # reward feedback from human: + and -
         self.NEUTRAL_FEEDBACK = 0.05  # if no feedback, this reward applied (+)
-        self.RETRO_FEEDBACK = 0.2  # reward feedback from human: + and -
+        self.RETRO_FEEDBACK = 10.0  # reward feedback from human: + and -
+        self.reward_array = []
+        self.step_count = 0
+
 
         # initial Q values
         self.Q_values = {}
@@ -105,15 +104,15 @@ class SimpleGridEnv(Env):
         Get the reward of a given cell.
         """
         if not self.is_in_bounds(x, y):
-            return -1.0
+            return -0.1
         elif not self.is_free(x, y):
-            return -1.0
+            return -0.1
         elif (x, y) == self.goal_xy:
-            return 1.0
+            return 5.0
         elif (x, y) == self.prev_agent_xy:
             return -0.1
         else:
-            return 0.1
+            return 0.0
         
     def get_best_action(self, state):
         mx_nxt_reward = 0
@@ -125,21 +124,11 @@ class SimpleGridEnv(Env):
                 mx_nxt_reward = nxt_reward
         return action
     
-    
     def choose_action(self):
-
         if self.reward_type in ["q_learning", "sarsa"]:
-            if np.random.uniform(0, 1) <= self.exp_rate:
-                action = np.random.choice(list(self.MOVES.keys()))
-            else:
-                action = self.get_best_action(self.agent_xy)
-
-        elif self.reward_type == "value_iteration":
-            action = self.get_best_action(self.agent_xy)
-
-        else :
-            action = self.action_space.sample()
-        return action
+            if np.random.uniform(0, 1) > self.exp_rate:
+                return max(self.Q_values[self.agent_xy], key=self.Q_values[self.agent_xy].get)
+        return self.action_space.sample()
 
 
     def reset(self, seed: int | None = None, options: dict = dict()) -> tuple:
@@ -164,9 +153,11 @@ class SimpleGridEnv(Env):
         return self.get_obs(), self.get_info()
 
     def get_action(self, action=None):
+        next_action_toggle = False
         if self.next_action is not None:
             action = self.next_action
             self.next_action = None
+            next_action_toggle = True
             
         if action == None:
             action = self.action_space.sample()
@@ -178,6 +169,7 @@ class SimpleGridEnv(Env):
         # Get the current position of the agent
         row, col = self.agent_xy
         dx, dy = self.MOVES[action]
+
         # if not retry:
         if self.is_in_bounds(row + dx, col + dy) and self.is_free(row + dx, col + dy):
             target_row = row + dx
@@ -186,7 +178,8 @@ class SimpleGridEnv(Env):
             target_row = row
             target_col = col
         
-        self.all_episode_state_actions.append({self.agent_xy: action})
+        if not next_action_toggle:
+            self.all_episode_state_actions.append({self.agent_xy: action})
         return target_row, target_col, action
 
     def automated_response(self, action, position):
@@ -218,6 +211,7 @@ class SimpleGridEnv(Env):
         ):
             self.agent_xy = (target_row, target_col)
             self.done = self.on_goal()
+
         self.n_iter += 1
 
         self.render()
@@ -237,19 +231,24 @@ class SimpleGridEnv(Env):
         reward_value = self.state_values[target_row][target_col] + block_reward + u_reward
 
         if self.reward_type == "q_learning":
-            self.reward += self.lr * (
-                (u_reward + block_reward)
-                + self.decay_gamma * max(list(self.Q_values[self.agent_xy].values()))
-                - self.state_values[target_row][target_col]
+            block_reward = self.get_reward(*self.agent_xy)
+            reward = block_reward + u_reward
+            Q =  self.Q_values[self.agent_xy][action] + self.lr * (
+                (reward)
+                + (self.decay_gamma * max(list(self.Q_values[self.agent_xy].values())))
+                - self.Q_values[self.agent_xy][action]
             )
-            self.Q_values[self.agent_xy][action] = reward_value
+            self.Q_values[self.agent_xy][action] = Q
+            
         if self.reward_type == "sarsa":
             self.next_action = self.choose_action()
-            next_state_q_value = self.Q_values[self.agent_xy][self.next_action]
+            self.next_row, self.next_col, self.next_action = self.get_action(self.next_action)
+            next_state_q_value = self.Q_values[(self.next_row, self.next_col)][self.next_action]
             td_target = u_reward + block_reward + self.decay_gamma * next_state_q_value
             td_error = td_target - self.state_values[target_row][target_col]
+
             self.reward += self.lr * td_error
-            self.Q_values[self.agent_xy][action] = reward_value
+            self.Q_values[self.agent_xy][action] = self.reward
             # if self.done:
             #     unique_dicts = list(map(dict, set(tuple(sorted(d.items())) for d in self.all_episode_state_actions)))
 
@@ -259,7 +258,9 @@ class SimpleGridEnv(Env):
             #         self.Q_values[self.agent_xy][action] += 0.5
         else:
             self.reward = reward_value
-
+        
+        self.reward_array.append(self.reward)
+        # print(self.reward)
         return self.get_obs(), self.reward, self.done, False, self.get_info()
 
     def parse_obstacle_map(self, obstacle_map) -> np.ndarray:
@@ -354,6 +355,7 @@ class SimpleGridEnv(Env):
         Check if the agent is on its own goal.
         """
         return self.agent_xy == self.goal_xy
+    
 
     def is_free(self, row: int, col: int) -> bool:
         """
