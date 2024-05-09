@@ -38,7 +38,7 @@ if __name__ == "__main__":
         [["R"], ["R"], ["R"], ["X"]],
     ]
 
-    rounds = 50
+
 
     env = gym.make(
         "SimpleGrid-4x4-v0",
@@ -47,25 +47,27 @@ if __name__ == "__main__":
         decision_map=decision_map,
         human_feedback=1,
         retrospective_feedback=True,
-        reward_type="q_learning", 
+        reward_type="sarsa", 
     )
     obs, info = env.reset(seed=1, options=options)
     rew = env.unwrapped.reward
     done = env.unwrapped.done
 
     logger.info("Running action-perception loop...")
-
+    expisodes = 5
     with open(f"log/{FOLDER_NAME}/history.csv", "w") as f:
         f.write(f"step,x,y,reward,done,action\n")
-        for episode in range(rounds):
+        for episode in range(expisodes):
             obs, info = env.reset(seed=1, options=options)
-            env.episode = episode
+            env.unwrapped.episode = episode
             rew = env.unwrapped.reward
             done = env.unwrapped.done           
             while not done:        
-                action = env.get_action() 
+                _,_,action = env.unwrapped.get_action() 
                 obs, rew, done, _, info = env.step(action)
-        print(env.unwrapped.Q_values)
+            print(env.unwrapped.Q_values)
+
+        
 
     if env.render_mode == "rgb_array_list":
         frames = env.render()

@@ -21,22 +21,9 @@ MAPS = {
 }
 
 
-N_QAGENT = 50  # iterations of the basic value iteration agent
-N_IRLAGENT = 1  # number of iterations of IRLplus to perform
-EXPLORE = 0.3  # the explore proportion: (1-EXPLORE) for exloit
-MANUAL_FEEDBACK = 0.1  # reward feedback from human: + and -
-NEUTRAL_FEEDBACK = 0.05  # if no feedback, this reward applied (+)
-LOGGING = False  # set full logging to terminal or not...
-# maze setup - leave alone for now
-# BOARD_ROWS = 3
-# BOARD_COLS = 4
-# WIN_STATE = (0, 3)
-# LOSE_STATE = (1, 3)
-# START = (2, 0)          #third row, first column
-
 
 class SimpleGridEnv(Env):
-    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 7}
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     FREE: int = 0
     OBSTACLE: int = 1
     MOVES: dict[int, tuple] = {
@@ -81,6 +68,7 @@ class SimpleGridEnv(Env):
         self.action_space = spaces.Discrete(len(self.MOVES))
         self.observation_space = spaces.Discrete(n=self.nrow * self.ncol)
         self.state_values = np.zeros((self.nrow, self.ncol))  # state values
+        self.all_episode_state_actions = []
 
         # Rendering configuration
         self.fig = None
@@ -90,15 +78,19 @@ class SimpleGridEnv(Env):
         self.human_feedback = human_feedback
         self.reward_type = reward_type
         self.retrospective_feedback = retrospective_feedback
-        self.lr = 0.2
-        self.decay_gamma = 0.9
-        self.exp_rate = EXPLORE
+        self.steps_per_feeback = 10
+        self.steps_per_ret_feeback = 10
+        self.lr = 0.3
+        self.decay_gamma = 0.95
+        self.exp_rate = 0.7 
         self.step_count = 0
         self.max_steps = 100
         self.episode = episode
-
-        # self.q_table = {}
-        # self.initialise_q_table()
+        self.next_action = None
+        self.prev_agent_xy = None
+        self.MANUAL_FEEDBACK = 0.1  # reward feedback from human: + and -
+        self.NEUTRAL_FEEDBACK = 0.05  # if no feedback, this reward applied (+)
+        self.RETRO_FEEDBACK = 0.2  # reward feedback from human: + and -
 
         # initial Q values
         self.Q_values = {}
@@ -108,39 +100,49 @@ class SimpleGridEnv(Env):
                 for a in self.MOVES:
                     self.Q_values[(i, j)][a] = 0.0  # Q value is a dict of dict
 
-    def choose_action(self):
-        # choose action with most expected value
-        mx_nxt_reward = 0
-        if np.random.uniform(0, 1) <= self.exp_rate:
-            action = np.random.choice(list(self.MOVES.keys()))
+    def get_reward(self, x: int, y: int) -> float:
+        """
+        Get the reward of a given cell.
+        """
+        if not self.is_in_bounds(x, y):
+            return -1.0
+        elif not self.is_free(x, y):
+            return -1.0
+        elif (x, y) == self.goal_xy:
+            return 1.0
+        elif (x, y) == self.prev_agent_xy:
+            return -0.1
         else:
-            # greedy action
-            for a in self.MOVES:
-                nxt_reward = self.Q_values[self.agent_xy][a]
-                if nxt_reward >= mx_nxt_reward:
-                    action = a
-                    mx_nxt_reward = nxt_reward
-            # print("current pos: {}, greedy aciton: {}".format(self.State.state, action))
+            return 0.1
+        
+    def get_best_action(self, state):
+        mx_nxt_reward = 0
+        action = None
+        for a in self.MOVES:
+            nxt_reward = self.Q_values[state][a]
+            if nxt_reward >= mx_nxt_reward:
+                action = a
+                mx_nxt_reward = nxt_reward
+        return action
+    
+    
+    def choose_action(self):
+
+        if self.reward_type in ["q_learning", "sarsa"]:
+            if np.random.uniform(0, 1) <= self.exp_rate:
+                action = np.random.choice(list(self.MOVES.keys()))
+            else:
+                action = self.get_best_action(self.agent_xy)
+
+        elif self.reward_type == "value_iteration":
+            action = self.get_best_action(self.agent_xy)
+
+        else :
+            action = self.action_space.sample()
         return action
 
-    # def initialise_state_values(self):
-    #     # For each position in the grid
-    #     for i in range(self.nrow):
-    #         for j in range(self.ncol):
-    #             # Initialize the state value to 0
-    #             self.state_values[i, j] = 0
 
     def reset(self, seed: int | None = None, options: dict = dict()) -> tuple:
-        """
-        Reset the environment.
-
-        Parameters
-        ----------
-        seed: int | None
-            Random seed.
-        options: dict
-            Optional dict that allows you to define the start (`start_loc` key) and goal (`goal_loc`key) position when resetting the env. By default options={}, i.e. no preference is expressed for the start and goal states and they are randomly sampled.
-        """
 
         # Set seed
         super().reset(seed=seed)
@@ -157,47 +159,15 @@ class SimpleGridEnv(Env):
 
         # Check integrity
         self.integrity_checks()
-
-        # if self.render_mode == "human":
         self.render()
 
         return self.get_obs(), self.get_info()
 
-    # def chooseAction(self, rand=False, actAvoid=0):
-    #     # choose action with most expected value,
-    #     #  unless we want an explicitly different action...
-    #     #  this can be changed significantly to improve the performance
-    #     mx_nxt_reward = (
-    #         -99999
-    #     )  # needs to initially be large and negative, because of possible negative state values
-    #     action = ""
-
-    #     if rand == True:  # this part intentionally left uncommented: what does it do?
-    #         flag = True
-    #         while flag:
-    #             action = np.random.choice(self.MOVES)
-    #             if action == actAvoid:
-    #                 flag = True
-    #             else:
-    #                 flag = False
-    #         return action
-
-    #     if np.random.uniform(0, 1) <= self.exp_rate:
-    #         action = np.random.choice(self.actions)
-    #     else:
-    #         # greedy action
-    #         for a in self.actions:
-    #             nxt_reward = self.state_values[self.State.nxtPosition(a)]
-    #             if nxt_reward >= mx_nxt_reward:
-    #                 action = a
-    #                 mx_nxt_reward = nxt_reward
-    #     return action
-
     def get_action(self, action=None):
-        """
-        Take a step in the environment.
-        """
-        # Choose an action randomly
+        if self.next_action is not None:
+            action = self.next_action
+            self.next_action = None
+            
         if action == None:
             action = self.action_space.sample()
         
@@ -215,9 +185,9 @@ class SimpleGridEnv(Env):
         else:
             target_row = row
             target_col = col
-
+        
+        self.all_episode_state_actions.append({self.agent_xy: action})
         return target_row, target_col, action
-
 
     def automated_response(self, action, position):
         if self.MOVES_TEXT[action] in self.decision_map[position[0]][position[1]]:
@@ -225,35 +195,24 @@ class SimpleGridEnv(Env):
         else:
             return 2
 
-    # def giveReward(self):
-    #     if self.state == WIN_STATE:
-    #         return 1
-    #     elif self.state == LOSE_STATE:
-    #         return -1
-    #     else:
-    #         return 0
-
     def step(self, action):
         target_row, target_col, action = self.get_action(action)
         u_reward = 0
 
         self.step_count += 1
         if self.human_feedback == 1:
-            # print("Next action chosen: ", self.MOVES_TEXT[action])
-            # print("action", action)
-            # print("agent_xy", self.agent_xy)
-            good_feedback = self.automated_response(action, self.agent_xy)
-            if good_feedback == 1:
-                action = action
-                # print("Good Action")
-            else:
-                target_row, target_col, action = self.get_action()
-                # print("Bad Action - new selected")
+            if self.step_count % self.steps_per_feeback == 0:
+                good_feedback = self.automated_response(action, self.agent_xy)
+                if good_feedback == 1:
+                    action = action
+                    u_reward = self.MANUAL_FEEDBACK
+                else:
+                    target_row, target_col, action = self.get_action()
+                    u_reward = -self.MANUAL_FEEDBACK
 
-        prev_agent_xy = self.agent_xy
+        self.prev_agent_xy = self.agent_xy
         prev_action = action
 
-        # Check if the move is valid
         if self.is_in_bounds(target_row, target_col) and self.is_free(
             target_row, target_col
         ):
@@ -261,19 +220,17 @@ class SimpleGridEnv(Env):
             self.done = self.on_goal()
         self.n_iter += 1
 
-        # if self.render_mode == "human":
         self.render()
 
         if self.retrospective_feedback == 1:
-            ret_response = self.automated_response(prev_action, prev_agent_xy)
-            if ret_response == 1:
-                # feedback = input("      /was/ this action g(ood) or b(ad): ")
-                # if feedback == "g":
-                u_reward = MANUAL_FEEDBACK
-            elif ret_response == 2:
-                u_reward = -MANUAL_FEEDBACK
-            else:
-                u_reward = NEUTRAL_FEEDBACK
+            if self.step_count % self.steps_per_ret_feeback == 0:
+                ret_response = self.automated_response(prev_action, self.prev_agent_xy)
+                if ret_response == 1:
+                    u_reward = self.RETRO_FEEDBACK
+                elif ret_response == 2:
+                    u_reward = -self.RETRO_FEEDBACK
+                else:
+                    u_reward = self.NEUTRAL_FEEDBACK
 
         # Compute the reward
         block_reward = self.get_reward(*self.agent_xy)
@@ -286,6 +243,20 @@ class SimpleGridEnv(Env):
                 - self.state_values[target_row][target_col]
             )
             self.Q_values[self.agent_xy][action] = reward_value
+        if self.reward_type == "sarsa":
+            self.next_action = self.choose_action()
+            next_state_q_value = self.Q_values[self.agent_xy][self.next_action]
+            td_target = u_reward + block_reward + self.decay_gamma * next_state_q_value
+            td_error = td_target - self.state_values[target_row][target_col]
+            self.reward += self.lr * td_error
+            self.Q_values[self.agent_xy][action] = reward_value
+            # if self.done:
+            #     unique_dicts = list(map(dict, set(tuple(sorted(d.items())) for d in self.all_episode_state_actions)))
+
+            #     for data in unique_dicts:
+            #         self.agent_xy = list(data.keys())[0]
+            #         action = list(data.values())[0]
+            #         self.Q_values[self.agent_xy][action] += 0.5
         else:
             self.reward = reward_value
 
@@ -395,19 +366,6 @@ class SimpleGridEnv(Env):
         Check if a target cell is in the grid bounds.
         """
         return 0 <= row < self.nrow and 0 <= col < self.ncol
-
-    def get_reward(self, x: int, y: int) -> float:
-        """
-        Get the reward of a given cell.
-        """
-        if not self.is_in_bounds(x, y):
-            return -1.0
-        elif not self.is_free(x, y):
-            return -1.0
-        elif (x, y) == self.goal_xy:
-            return 1.0
-        else:
-            return 0.0
 
     def get_obs(self) -> int:
         return self.to_s(*self.agent_xy)
